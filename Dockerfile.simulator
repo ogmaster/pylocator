@@ -1,0 +1,12 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir paho-mqtt
+
+# Copy simulator script
+COPY simulator/ .
+
+# Command to run the simulator
+CMD ["python", "simulator.py"]
