@@ -10,7 +10,7 @@ broker_address = os.environ.get("MQTT_BROKER", "localhost")
 broker_port = 1883
 topic = "objects/tracking/position"
 object_count = 50
-update_interval = 1/3  # seconds (3 updates per second)
+update_interval = 1/10  # seconds (10 updates per second)
 
 print(f"Connecting to MQTT broker at {broker_address}:{broker_port}")
 
