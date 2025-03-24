@@ -4,3 +4,5 @@ plotly==5.18.0
 paho-mqtt==2.1.0
 numpy==1.26.0
 pillow==10.1.0
+influxdb-client==1.39.0
+pymongo==4.11.0

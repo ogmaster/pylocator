@@ -1,6 +1,7 @@
-version: '3'
+version: '3.8'
 
 services:
+  # Message Broker
   mqtt-broker:
     image: eclipse-mosquitto:latest
     ports:
@@ -10,20 +11,94 @@ services:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
-    restart: unless-stopped
+    networks:
+      - tracking-network
 
-  object-tracker:
+  # Time-Series Database
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword
+      - DOCKER_INFLUXDB_INIT_ORG=tracking
+      - DOCKER_INFLUXDB_INIT_BUCKET=object_positions
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-token
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    networks:
+      - tracking-network
+
+  # Object Metadata Database
+  mongodb:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=adminpassword
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - tracking-network
+
+  # Data Processor Service
+  data-processor:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.processor
+    environment:
+      - MQTT_BROKER=mqtt-broker
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=tracking
+      - INFLUXDB_BUCKET=object_positions
+      - MONGODB_URI=mongodb://admin:adminpassword@mongodb:27017/
+    depends_on:
+      - mqtt-broker
+      - influxdb
+      - mongodb
+    networks:
+      - tracking-network
+
+  # REST API Service
+  api-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "5001:5001"
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=tracking
+      - INFLUXDB_BUCKET=object_positions
+      - MONGODB_URI=mongodb://admin:adminpassword@mongodb:27017/
+    depends_on:
+      - influxdb
+      - mongodb
+    networks:
+      - tracking-network
+
+  # Visualization Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
     ports:
       - "8050:8050"
     environment:
+      - API_SERVICE_URL=http://api-service:5001
       - MQTT_BROKER=mqtt-broker
     depends_on:
+      - api-service
       - mqtt-broker
-    restart: unless-stopped
+    networks:
+      - tracking-network
 
+  # Test Data Generator (optional)
   simulator:
     build:
       context: .
@@ -32,4 +107,13 @@ services:
       - MQTT_BROKER=mqtt-broker
     depends_on:
       - mqtt-broker
-    restart: unless-stopped
+    networks:
+      - tracking-network
+
+networks:
+  tracking-network:
+    driver: bridge
+
+volumes:
+  influxdb-data:
+  mongodb-data:

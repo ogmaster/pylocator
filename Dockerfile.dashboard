@@ -1,0 +1,15 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir dash dash-bootstrap-components plotly paho-mqtt requests pandas numpy
+
+# Copy application code
+COPY app/ .
+
+# Expose the port
+EXPOSE 8050
+
+# Command to run the dashboard
+CMD ["python", "app.py"]

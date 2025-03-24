@@ -1,0 +1,15 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir fastapi uvicorn influxdb-client pymongo
+
+# Copy application code
+COPY api/ .
+
+# Expose the port
+EXPOSE 5001
+
+# Command to run the API
+CMD ["python", "api.py"]
