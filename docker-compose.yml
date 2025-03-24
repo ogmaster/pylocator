@@ -63,22 +63,44 @@ services:
     networks:
       - tracking-network
 
+  # Load balancer
+  nginx:
+    image: nginx:latest
+    ports:
+      - "5001:80"  # Expose on host port 5001
+    volumes:
+      - ./nginx/conf:/etc/nginx/conf.d
+    depends_on:
+      - api-service
+    networks:
+      - tracking-network
+
   # REST API Service
   api-service:
     build:
       context: .
       dockerfile: Dockerfile.api
-    ports:
-      - "5001:5001"
+    expose:
+      - "5001"  # Only expose to internal network, not to host
     environment:
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=my-super-secret-token
       - INFLUXDB_ORG=tracking
       - INFLUXDB_BUCKET=object_positions
       - MONGODB_URI=mongodb://admin:adminpassword@mongodb:27017/
-    depends_on:
-      - influxdb
-      - mongodb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '0.5'  # Limit CPU usage per container
+          memory: 512M  # Limit memory usage
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        delay: 10s
     networks:
       - tracking-network
 
@@ -90,10 +112,10 @@ services:
     ports:
       - "8050:8050"
     environment:
-      - API_SERVICE_URL=http://api-service:5001
+      - API_SERVICE_URL=http://nginx:80  # Updated to use nginx instead of direct connection
       - MQTT_BROKER=mqtt-broker
     depends_on:
-      - api-service
+      - nginx  # Updated dependency to nginx instead of api-service
       - mqtt-broker
     networks:
       - tracking-network
@@ -107,6 +129,12 @@ services:
       - MQTT_BROKER=mqtt-broker
     depends_on:
       - mqtt-broker
+    networks:
+      - tracking-network
+
+  # Redis for caching
+  redis:
+    image: redis:alpine
     networks:
       - tracking-network
 

@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from influxdb_client import InfluxDBClient
@@ -7,6 +7,13 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import uuid
 import uvicorn
+import redis
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
+from fastapi_cache.decorator import cache
+import socket
+import psutil
+import time
 
 app = FastAPI(title="Object Tracking API")
 
@@ -24,8 +31,9 @@ influxdb_url = os.environ.get("INFLUXDB_URL", "http://localhost:8086")
 influxdb_token = os.environ.get("INFLUXDB_TOKEN", "my-token")
 influxdb_org = os.environ.get("INFLUXDB_ORG", "tracking")
 influxdb_bucket = os.environ.get("INFLUXDB_BUCKET", "object_positions")
-
 mongodb_uri = os.environ.get("MONGODB_URI", "mongodb://localhost:27017/")
+redis_host = os.environ.get("REDIS_HOST", "redis")
+redis_port = int(os.environ.get("REDIS_PORT", "6379"))
 
 # DB Clients
 influx_client = InfluxDBClient(url=influxdb_url, token=influxdb_token, org=influxdb_org)
@@ -35,6 +43,23 @@ mongo_client = MongoClient(mongodb_uri)
 db = mongo_client['object_tracking']
 objects_collection = db['objects']
 events_collection = db['events']
+
+# Create database indexes for performance
+def create_indexes():
+    # Create indexes for frequently queried collections
+    objects_collection.create_index("status")
+    db['zones'].create_index("active")
+    db['zone_events'].create_index([("object_id", 1), ("timestamp", -1)])
+    db['zone_events'].create_index([("zone_id", 1), ("timestamp", -1)])
+    db['events'].create_index([("object_id", 1), ("timestamp", -1)])
+    db['events'].create_index("event_type")
+
+# Initialize FastAPI Cache on startup
+@app.on_event("startup")
+async def startup():
+    redis_client = redis.Redis(host=redis_host, port=redis_port)
+    FastAPICache.init(RedisBackend(redis_client), prefix="fastapi-cache")
+    create_indexes()  # Create MongoDB indexes
 
 def format_timestamp(timestamp):
     """Format timestamp to ISO format string, handling various input types."""
@@ -169,8 +194,8 @@ def get_events(
     
     return events
 
-
 @app.get("/zones")
+@cache(expire=60)  # Cache for 60 seconds
 def get_zones(active_only: bool = True):
     """Get all zones"""
     query = {}
@@ -184,6 +209,7 @@ def get_zones(active_only: bool = True):
     return zones
 
 @app.get("/zones/{zone_id}")
+@cache(expire=60)  # Cache for 60 seconds
 def get_zone(zone_id: str):
     """Get a specific zone by ID"""
     zone = db['zones'].find_one({"_id": zone_id})
@@ -204,6 +230,8 @@ def create_zone(zone: dict):
     zone["active"] = True
     
     db['zones'].insert_one(zone)
+    # Invalidate the zones cache when a new zone is created
+    FastAPICache.clear(namespace="zones")
     return {"id": zone["_id"], "status": "created"}
 
 @app.put("/zones/{zone_id}")
@@ -219,6 +247,9 @@ def update_zone(zone_id: str, zone_update: dict):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Zone not found")
     
+    # Invalidate both the specific zone cache and the zones list cache
+    FastAPICache.clear(namespace=f"zones_{zone_id}")
+    FastAPICache.clear(namespace="zones")
     return {"status": "updated"}
 
 @app.delete("/zones/{zone_id}")
@@ -237,9 +268,13 @@ def delete_zone(zone_id: str, hard_delete: bool = False):
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Zone not found")
     
+    # Invalidate both the specific zone cache and the zones list cache
+    FastAPICache.clear(namespace=f"zones_{zone_id}")
+    FastAPICache.clear(namespace="zones")
     return {"status": "deleted"}
 
 @app.get("/zone-events")
+@cache(expire=30)  # Cache for 30 seconds
 def get_zone_events(
     zone_id: Optional[str] = None,
     object_id: Optional[str] = None,
@@ -278,6 +313,7 @@ def get_zone_events(
     return events
 
 @app.get("/objects/{object_id}/zones")
+@cache(expire=10)  # Cache for 30 seconds
 def get_object_zones(
     object_id: str,
     start: Optional[str] = None,
@@ -321,5 +357,45 @@ def get_object_zones(
     
     return result
 
+@app.get("/health")
+def health_check():
+    """Health check endpoint for load balancer"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "services": {
+            "mongodb": "connected" if mongo_client is not None else "disconnected",
+            "influxdb": "connected" if influx_client is not None else "disconnected",
+            "redis": "connected" if FastAPICache._cache is not None else "disconnected"
+        }
+    }
+
+@app.get("/system/instance-info")
+def instance_info():
+    """Get information about this API instance"""
+    try:
+        hostname = socket.gethostname()
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        
+        return {
+            "hostname": hostname,
+            "instance_id": os.environ.get("HOSTNAME", "unknown"),
+            "cpu_usage": process.cpu_percent(),
+            "memory_usage_mb": mem_info.rss / (1024 * 1024),
+            "uptime_seconds": time.time() - process.create_time(),
+            "thread_count": process.num_threads(),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 if __name__ == "__main__":
-    uvicorn.run("api:app", host="0.0.0.0", port=5001, reload=True)
+    # Use multiple worker processes
+    uvicorn.run(
+        "api:app", 
+        host="0.0.0.0", 
+        port=5001, 
+        workers=4,  # Number of worker processes
+        log_level="info"
+    )

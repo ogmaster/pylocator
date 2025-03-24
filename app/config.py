@@ -4,7 +4,7 @@ Configuration settings for the Distributed Object Tracking System.
 import os
 
 # API and MQTT settings
-API_SERVICE_URL = os.environ.get("API_SERVICE_URL", "http://localhost:5001")
+API_SERVICE_URL = os.environ.get("API_SERVICE_URL", "http://nginx:80")
 MQTT_BROKER = os.environ.get("MQTT_BROKER", "localhost")
 MQTT_PORT = 1883
 MQTT_TOPIC = "objects/tracking/position"
