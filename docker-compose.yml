@@ -39,8 +39,10 @@ services:
     environment:
       - MONGO_INITDB_ROOT_USERNAME=admin
       - MONGO_INITDB_ROOT_PASSWORD=adminpassword
+      - MONGO_INITDB_DATABASE=admin
     volumes:
       - mongodb-data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d
     networks:
       - tracking-network
 
@@ -135,6 +137,22 @@ services:
   # Redis for caching
   redis:
     image: redis:alpine
+    networks:
+      - tracking-network
+
+  # MongoDB Express
+  mongo-express:
+    image: mongo-express:latest
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=admin
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=adminpassword
+      - ME_CONFIG_MONGODB_URL=mongodb://admin:adminpassword@mongodb:27017/
+      - ME_CONFIG_BASICAUTH_USERNAME=admin    # Basic auth for mongo-express
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin    # Basic auth for mongo-express
+    depends_on:
+      - mongodb
     networks:
       - tracking-network
 
